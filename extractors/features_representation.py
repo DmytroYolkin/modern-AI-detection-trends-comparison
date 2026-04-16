@@ -40,12 +40,8 @@ def main():
     print("--- 2. StyleDecipher Extractor ---")
     try:
         # StyleDecipher expects rewrites to compare against
-        sample_rewrites = [
-            "AI is quickly changing many global industries. Machine learning is getting more advanced in fields like medicine and banking. Yet, this fast progress causes ethical problems that experts must fix.",
-            "Across the world, various sectors are being transformed by artificial intelligence. Sophisticated machine learning models are used in finance and healthcare. But we must address the ethical challenges brought by this rapid growth."
-        ]
         
-        style_features = styledecipher_features(sample_text, sample_rewrites)
+        style_features = styledecipher_features(sample_text)
         print(f"Total StyleDecipher features extracted: {len(style_features)} (Mean and STD of similarities)")
         print(f"Feature vector shape: {style_features.shape}")
         print("Feature values:")
@@ -59,7 +55,7 @@ def main():
     print("--- 3. TRACE User Profiler Extractor ---")
     try:
         # Initialize embedder on CPU for compatibility
-        trace_embedder = TRACEUserProfileEmbedder(device='cpu')
+        trace_embedder = TRACEUserProfileEmbedder(device='cuda')
         
         # TRACE expects a list of texts from the author
         trace_embedding = trace_embedder.get_author_embedding([sample_text])

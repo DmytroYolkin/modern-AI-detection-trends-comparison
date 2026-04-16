@@ -4,11 +4,67 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from Levenshtein import distance as levenshtein_distance
-
+import ollama
 
 # ===== INIT MODEL ONCE =====
-model = SentenceTransformer('all-MiniLM-L6-v2')
+model = SentenceTransformer('all-mpnet-base-v2')
 
+MODELS = ["llama3", "mistral", "gemma", "phi3", "qwen2"]
+
+PROMPT_TEMPLATE = """
+Rewrite the following text.
+
+Constraints:
+- Preserve the exact meaning
+- Change sentence structure significantly
+- Use different vocabulary
+- Avoid copying phrases
+- Keep it natural and fluent
+
+Text:
+{text}
+"""
+
+def generate_rewrites_multi_llm(text, models=MODELS, max_per_model=1):
+    """
+    Generates rewrites using multiple LLMs (StyleDecipher-style).
+
+    Args:
+        text (str)
+        models (list[str])
+        max_per_model (int): number of rewrites per model
+
+    Returns:
+        list[str]
+    """
+    rewrites = []
+
+    for model in models:
+        for _ in range(max_per_model):
+            try:
+                response = ollama.chat(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You are a rewriting assistant."},
+                        {"role": "user", "content": PROMPT_TEMPLATE.format(text=text)}
+                    ],
+                    options={
+                        "temperature": 1.0,
+                        "top_p": 0.95
+                    }
+                )
+
+                out = response["message"]["content"].strip()
+
+                # basic filtering
+                if len(out) > 20 and out != text:
+                    rewrites.append(out)
+
+            except Exception as e:
+                print(f"[{model}] failed:", e)
+
+    # remove duplicates
+    return list(set(rewrites))
 
 # ===== N-GRAM OVERLAP =====
 def get_ngrams(text, n):
@@ -44,15 +100,16 @@ def embedding_similarity(t1, t2):
 
 
 # ===== MAIN FEATURE FUNCTION =====
-def styledecipher_features(original_text, rewritten_texts):
+def styledecipher_features(original_text) -> np.ndarray:
     """
     Args:
         original_text (str)
-        rewritten_texts (list[str])  ← provide your own LLM rewrites
 
     Returns:
         np.ndarray (10 features)
     """
+
+    rewritten_texts = generate_rewrites_multi_llm(original_text)
 
     features = []
 

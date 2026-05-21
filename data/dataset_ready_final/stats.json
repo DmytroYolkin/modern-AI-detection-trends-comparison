@@ -1,0 +1,46 @@
+{
+  "human": 3415,
+  "ai_original": 3620,
+  "rewrites_total": 6051,
+  "rewrites_per_provider": {
+    "gemini": 1270,
+    "mistral": 1272,
+    "groq": 1272,
+    "cohere": 965,
+    "anthropic": 1272
+  },
+  "rewrites_per_model": {
+    "gemini-3.1-flash-lite": 1270,
+    "mistral-small-latest": 1272,
+    "llama-3.1-8b-instant": 1272,
+    "command-r-plus-08-2024": 965,
+    "claude-haiku-4-5": 1272
+  },
+  "merged_total": 13086,
+  "by_split": {
+    "train": {
+      "total": 9097,
+      "human": 2390,
+      "ai": 6707,
+      "rewrites": 4185
+    },
+    "val": {
+      "total": 1952,
+      "human": 501,
+      "ai": 1451,
+      "rewrites": 899
+    },
+    "test": {
+      "total": 2037,
+      "human": 524,
+      "ai": 1513,
+      "rewrites": 967
+    }
+  },
+  "unique_authors_with_rewrites": 430,
+  "rewrites_per_source_text": {
+    "min": 4,
+    "max": 5,
+    "mean": 4.76
+  }
+}

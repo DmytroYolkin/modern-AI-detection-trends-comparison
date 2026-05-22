@@ -207,3 +207,12 @@ marimo/_lsp/
 __marimo__/
 
 test.py
+
+# --- training framework artifacts ---
+# Experimental / scratch checkpoints: keep the folder, ignore its contents
+models/test_models/*
+!models/test_models/.gitkeep
+# Cached extractor feature matrices (regenerate with training/build_dataset.py)
+data/features/
+
+.claude

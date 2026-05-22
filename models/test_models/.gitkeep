@@ -1,0 +1,4 @@
+Experimental / scratch model checkpoints from `training/train.py` land here.
+
+Everything in this folder EXCEPT this file is gitignored (see .gitignore).
+Copy a checkpoint into ../ready_models/ once it is validated.

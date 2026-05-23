@@ -99,3 +99,32 @@ def test_xgboost_fit_predict():
     clf = ClassicalClassifier("xgboost", n_estimators=50).fit(X, y)
     assert (clf.predict(X) == y).mean() > 0.8
     assert clf.feature_importances().shape == (NELA_DIM + STYLE_DIM + TRACE_DIM,)
+
+
+def test_mlp_fit_predict():
+    """sklearn MLPClassifier backend -- fit, predict, learn the signal."""
+    assert "mlp" in BACKENDS
+    X, y = _make_xy(n=300)
+    clf = ClassicalClassifier("mlp", n_estimators=120).fit(X, y)  # n_estimators -> epochs
+    pred = clf.predict(X)
+    assert pred.shape == (300,)
+    assert set(np.unique(pred)).issubset({0, 1})
+    assert (pred == y).mean() > 0.75              # signal is learnable
+    proba = clf.predict_proba(X)
+    assert proba.shape == (300, 2)
+    assert np.allclose(proba.sum(axis=1), 1.0, atol=1e-5)
+    # an MLP exposes no per-feature importance
+    assert clf.feature_importances() is None
+
+
+def test_mlp_class_weighting_via_oversample():
+    """MLP takes no sample_weight -> class_weighting must fall back cleanly."""
+    rng = np.random.default_rng(1)
+    # heavily imbalanced labels (mostly class 1)
+    nela = rng.normal(0, 1, (200, NELA_DIM)).astype(np.float32)
+    style = rng.normal(0, 1, (200, STYLE_DIM)).astype(np.float32)
+    trace = rng.normal(0, 1, (200, TRACE_DIM)).astype(np.float32)
+    X = flatten_features(nela, style, trace)
+    y = np.array([0] * 20 + [1] * 180, dtype=np.int64)
+    clf = ClassicalClassifier("mlp", n_estimators=60, class_weighting=True).fit(X, y)
+    assert clf.predict(X).shape == (200,)

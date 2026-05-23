@@ -7,16 +7,20 @@ concatenated feature vector:
 
     [ NELA 87 | StyleDecipher 10 | TRACE 128 ]  ->  225-dim input
 
-Tree ensembles do their own feature combination via splits, so no fusion step
-is needed -- the model *is* the combiner. `train_classical.py` drives this.
+Each classical model does its own feature combination -- tree splits, linear
+weights, or MLP layers -- so no fusion step is needed; the model *is* the
+combiner. `train_classical.py` drives this.
 """
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 
 # --- supported backends ----------------------------------------------------
-BACKENDS = ("xgboost", "random_forest", "logreg", "svm", "hist_gbm", "gradient_boosting")
+BACKENDS = ("xgboost", "random_forest", "logreg", "svm", "mlp",
+            "hist_gbm", "gradient_boosting")
 
 
 def flatten_features(nela: np.ndarray, style: np.ndarray, trace: np.ndarray) -> np.ndarray:
@@ -82,6 +86,20 @@ def _build_estimator(backend: str, seed: int, overrides: dict):
         from sklearn.svm import SVC
 
         return SVC(kernel="rbf", C=1.0, probability=True, random_state=seed)
+    if backend == "mlp":
+        from sklearn.neural_network import MLPClassifier
+
+        return MLPClassifier(
+            hidden_layer_sizes=(256, 128),
+            activation="relu",
+            solver="adam",
+            alpha=1e-4,                       # L2 regularisation
+            learning_rate_init=learning_rate or 1e-3,
+            max_iter=n_estimators or 300,     # `n_estimators` reused as max epochs
+            early_stopping=True,
+            n_iter_no_change=15,
+            random_state=seed,
+        )
     if backend == "hist_gbm":
         from sklearn.ensemble import HistGradientBoostingClassifier
 
@@ -101,6 +119,35 @@ def _build_estimator(backend: str, seed: int, overrides: dict):
             random_state=seed,
         )
     raise ValueError(f"unknown backend {backend!r}; pick from {BACKENDS}")
+
+
+def _accepts_sample_weight(estimator) -> bool:
+    """True when the estimator's ``fit`` accepts a ``sample_weight`` argument."""
+    try:
+        return "sample_weight" in inspect.signature(estimator.fit).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _balanced_oversample(X: np.ndarray, y: np.ndarray, seed: int):
+    """Random oversampling of minority classes up to the majority count.
+
+    Used to balance training for estimators (e.g. `MLPClassifier`) whose
+    ``fit`` takes no ``sample_weight``.
+    """
+    rng = np.random.default_rng(seed)
+    classes, counts = np.unique(y, return_counts=True)
+    target = int(counts.max())
+    parts = []
+    for cls in classes:
+        idx = np.flatnonzero(y == cls)
+        if len(idx) < target:
+            extra = rng.choice(idx, size=target - len(idx), replace=True)
+            idx = np.concatenate([idx, extra])
+        parts.append(idx)
+    order = np.concatenate(parts)
+    rng.shuffle(order)
+    return X[order], y[order]
 
 
 class ClassicalClassifier:
@@ -133,12 +180,19 @@ class ClassicalClassifier:
     # ---- fit / predict ---------------------------------------------------
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "ClassicalClassifier":
-        sample_weight = None
+        X = np.asarray(X)
+        y = np.asarray(y)
+        fit_kwargs = {}
         if self.class_weighting:
-            from sklearn.utils.class_weight import compute_sample_weight
+            if _accepts_sample_weight(self.estimator):
+                from sklearn.utils.class_weight import compute_sample_weight
 
-            sample_weight = compute_sample_weight("balanced", y)
-        self.estimator.fit(X, y, sample_weight=sample_weight)
+                fit_kwargs["sample_weight"] = compute_sample_weight("balanced", y)
+            else:
+                # estimators like MLPClassifier take no sample_weight --
+                # balance the training set by oversampling instead
+                X, y = _balanced_oversample(X, y, self.seed)
+        self.estimator.fit(X, y, **fit_kwargs)
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:

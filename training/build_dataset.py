@@ -41,6 +41,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 
+try:
+    from tqdm import tqdm
+except ImportError:  # tqdm is optional -- the bar is nice to have, not required
+    tqdm = None
+
 from data.preprocessing import Dataset
 from training import paths
 from training.extractor_pipeline import FeaturePipeline
@@ -165,6 +170,22 @@ def build_split(name: str, ds: Dataset, pipeline: FeaturePipeline, out_path: Pat
     since_ckpt = 0
     start = time.time()
 
+    # Live progress bar (tqdm) with elapsed/remaining/rate so two runs on
+    # different hardware can be compared at a glance. Persistent milestone
+    # lines every `log_every` records stay in tee'd logs for post-mortem
+    # comparison even after the bar's carriage returns are gone.
+    if tqdm is not None:
+        bar = tqdm(
+            total=len(todo), desc=f"[{name}]", unit="rec",
+            mininterval=2.0, dynamic_ncols=True,
+            bar_format="{l_bar}{bar:24}| {n_fmt}/{total_fmt} "
+                       "[{elapsed}<{remaining}, {rate_fmt}]",
+        )
+        _emit = tqdm.write  # writes a line without breaking the bar
+    else:
+        bar = None
+        _emit = print
+
     try:
         for sample in todo:
             try:
@@ -176,11 +197,13 @@ def build_split(name: str, ds: Dataset, pipeline: FeaturePipeline, out_path: Pat
                 }
             except Exception as exc:  # a zero row is the safe fallback
                 failures += 1
-                print(f"  [{name}] {sample.record_id} failed: {exc}")
+                _emit(f"  [{name}] {sample.record_id} failed: {exc}")
                 rows[sample.record_id] = _zero_row(sample)
 
             processed += 1
             since_ckpt += 1
+            if bar is not None:
+                bar.update(1)
             if since_ckpt >= checkpoint_every:
                 _save_features(out_path, rows, samples)
                 since_ckpt = 0
@@ -189,13 +212,18 @@ def build_split(name: str, ds: Dataset, pipeline: FeaturePipeline, out_path: Pat
                 elapsed = time.time() - start
                 rate = processed / max(elapsed, 1e-9)
                 eta = (len(todo) - processed) / max(rate, 1e-9)
-                print(f"  [{name}] {len(rows)}/{n} cached  "
-                      f"({rate:5.2f} rec/s, ETA {eta:5.0f}s)")
+                _emit(f"  [{name}] {len(rows)}/{n} cached  "
+                      f"({rate:5.2f} rec/s, elapsed {elapsed:5.0f}s, ETA {eta:5.0f}s)")
     except KeyboardInterrupt:
+        if bar is not None:
+            bar.close()
         _save_features(out_path, rows, samples)
         print(f"\n  [{name}] interrupted -- saved {len(rows)}/{n} records to {out_path}")
         print("  rerun the same command to resume.")
         raise SystemExit(130)
+    finally:
+        if bar is not None:
+            bar.close()
 
     _save_features(out_path, rows, samples)
     if failures:

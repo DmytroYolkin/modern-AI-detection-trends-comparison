@@ -215,4 +215,25 @@ models/test_models/*
 # Cached extractor feature matrices (regenerate with training/build_dataset.py)
 data/features/
 
+# --- transfer / runtime artifacts (regenerate, don't commit) ---
+# Feature-cache tarball produced by the RunPod download step
+features.tar.gz
+# RunPod CLI binary downloaded ad-hoc (platform-specific, not source)
+runpodctl
+runpodctl.exe
+runpodctl-*
+
+# --- backups / one-off scratch ---
+# .bak files written by the resplit script and any other backup pattern
+*.bak
+# stale task-output files from harness runs
+*.output
+# local copies of pod-side logs if you scp them down
+build.log
+ollama.log
+
+# --- IDE / OS junk ---
+.DS_Store
+Thumbs.db
+
 .claude

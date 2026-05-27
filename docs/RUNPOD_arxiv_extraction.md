@@ -29,6 +29,10 @@ appears in any training flow.
 
 ## 2. Pod setup (run once, top-to-bottom)
 
+The whole flow uses **tmux** so the long-running Ollama server and the
+extraction job survive SSH disconnects / browser-tab closes. tmux is
+pre-installed on the RunPod PyTorch template; if not, `apt-get update && apt-get install -y tmux`.
+
 ```bash
 # --- 2.1 repo -------------------------------------------------------------
 cd /workspace
@@ -43,16 +47,35 @@ pip install -r requirements.txt
 python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
 python -m spacy download en_core_web_sm
 
-# --- 2.3 ollama server ----------------------------------------------------
+# --- 2.3 ollama install ---------------------------------------------------
 curl -fsSL https://ollama.com/install.sh | sh
-export OLLAMA_HOST=0.0.0.0:11434
-nohup ollama serve > /tmp/ollama.log 2>&1 &
-sleep 5
-curl -s http://127.0.0.1:11434/api/tags   # smoke-test the server
+```
 
-# --- 2.4 pull the five StyleDecipher models -------------------------------
+### 2.4 Start the Ollama server in a tmux session
+
+Keep the server in its own tmux session so model loads/swaps + crash logs are
+inspectable without blocking your shell.
+
+```bash
+tmux new-session -d -s ollama \
+    "OLLAMA_HOST=0.0.0.0:11434 \
+     OLLAMA_KEEP_ALIVE=24h \
+     OLLAMA_NUM_PARALLEL=1 \
+     OLLAMA_MAX_LOADED_MODELS=5 \
+     ollama serve 2>&1 | tee /tmp/ollama.log"
+
+sleep 5
+curl -s http://127.0.0.1:11434/api/tags    # smoke-test: should return JSON
+```
+
+The env vars matter: `KEEP_ALIVE=24h` stops Ollama from unloading models
+between requests, and `MAX_LOADED_MODELS=5` keeps all 5 resident (needs ≥ 32 GB
+VRAM — drop to 2 on a 24 GB card like the RTX 4090).
+
+### 2.5 Pull the five StyleDecipher models
+
+```bash
 # These names match `MODELS` in extractors/styledecipher_extractor.py.
-# Ollama resolves each bare name to its current `:latest` tag.
 for m in llama3 mistral gemma phi3 qwen2; do
     ollama pull "$m"
 done
@@ -62,20 +85,45 @@ ollama list      # confirm all 5 are present
 Expected `ollama list` output: five rows, one per model name above. If any are
 missing, re-run that `ollama pull` — it resumes.
 
+### 2.6 tmux cheat sheet
+
+| Action | Keys / command |
+|---|---|
+| Detach from current session (leave it running) | `Ctrl-b` then `d` |
+| List sessions | `tmux ls` |
+| Reattach to the ollama server | `tmux attach -t ollama` |
+| Reattach to the extraction job | `tmux attach -t extract` |
+| Scroll back in a session | `Ctrl-b` then `[` (use arrows / PgUp; press `q` to exit scroll mode) |
+| Kill a session by name | `tmux kill-session -t <name>` |
+
 ---
 
-## 3. The single extraction command
+## 3. The single extraction command (in tmux)
+
+Run the extraction in its **own** tmux session — separate from the ollama
+server — so closing the browser / losing the SSH connection doesn't kill the
+job.
 
 ```bash
-python -m training.build_dataset \
-    --splits arxiv \
-    --styledecipher ollama \
-    --trace-context author \
-    --device cuda \
-    --checkpoint-every 25
+tmux new-session -d -s extract \
+    "cd /workspace/modern-AI-detection-trends-comparison && \
+     python -m training.build_dataset \
+        --splits arxiv \
+        --styledecipher ollama \
+        --trace-context author \
+        --device cuda \
+        --checkpoint-every 25 \
+        2>&1 | tee /tmp/extract.log"
 ```
 
-What this does:
+Attach to watch the tqdm progress bar:
+
+```bash
+tmux attach -t extract
+# detach again with: Ctrl-b  d
+```
+
+What the command does:
 
 - Loads only `data/testing_dataset/arxiv_final/arxiv_merged.jsonl` (no
   train/val/test loaded — arxiv is short-circuited).
@@ -86,8 +134,48 @@ What this does:
 - StyleDecipher rewrites are generated live by Ollama (5 LLMs × 1 rewrite per
   record).
 
-**Resumable**: if the pod is interrupted, just re-run the exact same command.
-Already-cached records are skipped and extraction resumes.
+**Resumable**: if the pod is interrupted or you kill the tmux session, just
+re-run the exact same `tmux new-session …` block. Already-cached records are
+skipped and extraction resumes from the last checkpoint.
+
+### 3.1 Monitor without attaching
+
+If you don't want to attach the full tmux session, tail the log directly:
+
+```bash
+tail -f /tmp/extract.log         # live progress
+grep -c '^  \[arxiv\]' /tmp/extract.log   # rough count of milestone lines
+
+# or peek at the cache as it grows
+python - <<'PY'
+import numpy as np
+d = np.load('data/features/arxiv.npz', allow_pickle=True)
+print('cached so far:', d['ids'].shape[0], '/ 2574')
+PY
+```
+
+### 3.2 When the job finishes
+
+The extract tmux session exits on its own when `build_dataset.py` returns.
+Check it ran cleanly:
+
+```bash
+tmux ls                                 # should no longer list "extract"
+tail -20 /tmp/extract.log               # should end with "Wrote feature caches + meta.json to ..."
+python - <<'PY'
+import numpy as np
+d = np.load('data/features/arxiv.npz', allow_pickle=True)
+print('final rows:', d['ids'].shape[0])           # expect 2574
+print('shapes:', d['nela'].shape, d['style'].shape, d['trace'].shape)
+print('style coverage:', d['style_ok'].mean())    # expect ~1.0
+PY
+```
+
+Then stop the ollama tmux session to free the GPU before you `runpodctl send`:
+
+```bash
+tmux kill-session -t ollama
+```
 
 ---
 
@@ -147,7 +235,11 @@ project workflow.)
 |---------|-------------|-----|
 | NLTK `punkt` resource missing | `python -c "import nltk; nltk.data.find('tokenizers/punkt')"` | `python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"` |
 | spaCy `en_core_web_sm` missing | `python -c "import spacy; spacy.load('en_core_web_sm')"` | `python -m spacy download en_core_web_sm` |
-| Ollama server not running | `curl -s http://127.0.0.1:11434/api/tags` (should JSON-list models) | `nohup ollama serve > /tmp/ollama.log 2>&1 &` |
+| Ollama server not running | `curl -s http://127.0.0.1:11434/api/tags` (should JSON-list models) | re-launch the `tmux new-session -d -s ollama …` block in §2.4 |
 | Only some models pulled | `ollama list` (expect 5 rows) | `ollama pull <missing-name>` |
 | GPU not visible to PyTorch | `python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"` | re-select a CUDA template / re-attach GPU |
-| `data/features/arxiv.npz` not appearing | check pod stdout for the tqdm bar lines; the file is written atomically every 25 records | wait for the first checkpoint; `ls -la data/features/` |
+| `data/features/arxiv.npz` not appearing | `tail -f /tmp/extract.log` — look for the tqdm bar lines; file is written atomically every 25 records | wait for the first checkpoint; `ls -la data/features/` |
+| `tmux` not installed on this template | `which tmux` | `apt-get update && apt-get install -y tmux` |
+| `extract` tmux session vanished from `tmux ls` | `tail -50 /tmp/extract.log` — look for a stack trace or "Wrote feature caches …" | if it errored, fix the root cause and re-launch the §3 tmux command (resumes from checkpoint); if it completed, you're done |
+| Ollama keeps unloading models between requests (slow) | `tmux attach -t ollama` — look for repeated "loading model" lines | confirm `OLLAMA_KEEP_ALIVE=24h` and `OLLAMA_MAX_LOADED_MODELS=5` are set in the §2.4 tmux command; if GPU < 32 GB, drop to `MAX_LOADED_MODELS=2` |
+| Lost the SSH connection mid-run | both tmux sessions keep running on the pod — no action needed | `ssh` back in, `tmux ls`, `tmux attach -t extract` to confirm progress |

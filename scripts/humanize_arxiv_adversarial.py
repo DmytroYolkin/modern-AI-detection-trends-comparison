@@ -147,6 +147,8 @@ class AdvParaphraser:
                 print(f"[adv] loaded {mod_name}.{cls_name}")
                 return
             except (ImportError, AttributeError) as e:
+                import traceback
+                traceback.print_exc()
                 last_err = e
                 continue
 

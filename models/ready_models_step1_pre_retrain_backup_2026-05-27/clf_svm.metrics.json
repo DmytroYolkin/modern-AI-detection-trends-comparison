@@ -1,0 +1,20 @@
+{
+  "backend": "svm",
+  "fit_seconds": 2.56,
+  "val": {
+    "accuracy": 1.0,
+    "macro_f1": 1.0,
+    "per_class": {
+      "human": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "ai": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    }
+  }
+}

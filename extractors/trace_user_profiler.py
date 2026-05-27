@@ -51,9 +51,15 @@ class TRACEUserProfileEmbedder:
         dynamic user profiling (where author style might evolve), mechanisms for updating
         or incrementally learning embeddings would be necessary.
     """
-    def __init__(self, model_name='sentence-transformers/all-mpnet-base-v2',
+    def __init__(self, model_name='AnnaWegmann/Style-Embedding',
                  projection_hidden_dim=256, projection_output_dim=128,
                  device='cuda'):
+        # ``AnnaWegmann/Style-Embedding`` (Wegmann, Schraagen, Nguyen 2022,
+        # RepL4NLP) is a sentence-transformer fine-tuned with contrastive
+        # learning on Reddit conversations for stylistic similarity. It is the
+        # right backbone for an *author-style* fingerprint -- the previous
+        # ``all-mpnet-base-v2`` was trained for semantic similarity and so the
+        # TRACE features ended up reflecting topic, not authorship style.
         """
         Initializes the TRACEUserProfileEmbedder.
 
@@ -139,8 +145,21 @@ class TRACEUserProfileEmbedder:
             print("Warning: No principal sentences extracted. Returning empty embedding.")
             return np.array([])
 
-        # 2. Encode principal sentences using SBERT
-        encoded_input = self.tokenizer(principal_sentences, padding=True, truncation=True, return_tensors='pt').to(self.device)
+        # 2. Encode principal sentences using SBERT. Explicit ``max_length``
+        #    instead of relying on the tokenizer's ``model_max_length`` --
+        #    AnnaWegmann/Style-Embedding (RoBERTa-base) has only 514 position
+        #    embeddings (2..513 are valid for non-pad tokens), but some
+        #    tokenizers leave ``model_max_length`` unset, so ``truncation=True``
+        #    alone is a no-op and long inputs crash the position-embedding
+        #    lookup on GPU with a scatter/gather assert.
+        max_tokens = min(getattr(self.model.config, "max_position_embeddings", 512) - 2, 512)
+        encoded_input = self.tokenizer(
+            principal_sentences,
+            padding=True,
+            truncation=True,
+            max_length=max_tokens,
+            return_tensors='pt',
+        ).to(self.device)
         with torch.no_grad():
             model_output = self.model(**encoded_input)
 

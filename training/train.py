@@ -107,6 +107,9 @@ def train_one(config: TrainConfig, train_ds: FusionFeatureDataset,
         head_hidden_dim=config.head_hidden_dim,
         dropout=config.dropout,
         num_classes=config.num_classes,
+        modality_dropout_nela=config.modality_dropout_nela,
+        modality_dropout_style=config.modality_dropout_style,
+        modality_dropout_trace=config.modality_dropout_trace,
     ).to(device)
 
     # class-weighted loss for the imbalanced human/ai split
@@ -222,6 +225,18 @@ def main() -> None:
                         help="disable feature standardisation")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
+    parser.add_argument("--modality-dropout-nela",  type=float,
+                        default=TrainConfig.modality_dropout_nela,
+                        help="per-sample whole-block dropout probability for NELA "
+                             "(training-time only; default 0.5)")
+    parser.add_argument("--modality-dropout-style", type=float,
+                        default=TrainConfig.modality_dropout_style,
+                        help="per-sample whole-block dropout probability for StyleDecipher "
+                             "(training-time only; default 0.2)")
+    parser.add_argument("--modality-dropout-trace", type=float,
+                        default=TrainConfig.modality_dropout_trace,
+                        help="per-sample whole-block dropout probability for TRACE "
+                             "(training-time only; default 0.2)")
     args = parser.parse_args()
 
     train_npz = args.feature_dir / "train.npz"
@@ -263,6 +278,9 @@ def main() -> None:
             normalize_features=not args.no_normalize,
             seed=args.seed,
             device=args.device,
+            modality_dropout_nela=args.modality_dropout_nela,
+            modality_dropout_style=args.modality_dropout_style,
+            modality_dropout_trace=args.modality_dropout_trace,
         )
         base_name = args.name or f"fusion_{method}"
         # when sweeping, keep each method's checkpoint distinct

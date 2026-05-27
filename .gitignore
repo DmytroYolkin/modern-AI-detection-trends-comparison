@@ -215,6 +215,16 @@ models/test_models/*
 # Cached extractor feature matrices (regenerate with training/build_dataset.py)
 data/features/
 
+# --- baseline-detector artifacts (regenerate with test/compare_baselines.py) ---
+# Per-detector results JSON (one per run; output of the comparison runner)
+models/baseline_results/
+# R-Detect feature-reference tensors built from train.jsonl on first run
+# (~293 MB each; rebuilt automatically if missing)
+data/baseline_artifacts/
+# HF Hub cache + NLTK data the vendored R-Detect repo creates inside itself
+test/third_party/*/.cache/
+test/third_party/*/nltk_data/
+
 # --- transfer / runtime artifacts (regenerate, don't commit) ---
 # Feature-cache tarball produced by the RunPod download step
 features.tar.gz

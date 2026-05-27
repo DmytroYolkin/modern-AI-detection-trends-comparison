@@ -151,7 +151,7 @@ class FeaturePipeline:
         trace_context: str = "single",
         device: str = "auto",
         sbert_model: str = "all-mpnet-base-v2",
-        trace_model: str = "sentence-transformers/all-mpnet-base-v2",
+        trace_model: str = "AnnaWegmann/Style-Embedding",
         seed: int = 42,
     ) -> None:
         if styledecipher_mode not in ("cached", "ollama", "off"):

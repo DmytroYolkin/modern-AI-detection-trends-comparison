@@ -52,6 +52,10 @@ from training.extractor_pipeline import FeaturePipeline
 
 LABEL_TO_INDEX = {"human": 0, "ai": 1}
 ALL_SPLITS = ("train", "val", "test")
+# "arxiv" is an out-of-distribution test split (`data/testing_dataset/arxiv_final/`)
+# kept OUT of ALL_SPLITS so training flows never see it; only built when asked.
+ARXIV_SPLIT = "arxiv"
+ARXIV_JSONL = paths.REPO_ROOT / "data" / "testing_dataset" / "arxiv_final" / "arxiv_merged.jsonl"
 
 NELA_DIM = FeaturePipeline.NELA_DIM
 STYLE_DIM = FeaturePipeline.STYLE_DIM
@@ -139,11 +143,48 @@ def _stats(rows: dict, samples: list) -> dict:
 # Per-split build
 # ===========================================================================
 
+def _human_sibling_count(sample, ds: Dataset) -> int:
+    """Count same-author HUMAN texts available as TRACE context for `sample`.
+
+    Mirrors `training.rebuild_trace_author.trace_human_siblings`:
+      * same author_id
+      * label == "human"
+      * if sample is a rewrite, its source human text is excluded.
+    """
+    n = 0
+    for s in ds._by_author.get(sample.author_id, []):
+        if s.record_id == sample.record_id:
+            continue
+        if s.label != "human":
+            continue
+        if sample.is_rewrite and s.record_id == sample.source_text_id:
+            continue
+        n += 1
+    return n
+
+
 def build_split(name: str, ds: Dataset, pipeline: FeaturePipeline, out_path: Path,
                  *, limit: int | None = None, checkpoint_every: int = 25,
-                 restart: bool = False, log_every: int = 100) -> dict:
+                 restart: bool = False, log_every: int = 100,
+                 require_known_author: bool = False,
+                 min_human_siblings: int = 0) -> dict:
     """Extract features for one split, with resumable checkpointing."""
     samples = list(ds)
+    if require_known_author:
+        before = len(samples)
+        samples = [s for s in samples if s.has_known_author]
+        dropped = before - len(samples)
+        if dropped:
+            print(f"  [{name}] --require-known-author dropped {dropped}/{before} samples "
+                  f"with no known author (HC3 humans etc.)")
+    if min_human_siblings > 0:
+        before = len(samples)
+        samples = [s for s in samples if _human_sibling_count(s, ds) >= min_human_siblings]
+        dropped = before - len(samples)
+        if dropped:
+            print(f"  [{name}] --min-human-siblings {min_human_siblings} dropped "
+                  f"{dropped}/{before} samples whose author had too few human texts "
+                  "(non-USE AI + USE singletons)")
     if limit and limit < len(samples):
         # stride-sample so a smoke run spans the whole split (both classes)
         stride = max(1, len(samples) // limit)
@@ -239,9 +280,11 @@ def _parse_splits(value: str) -> list[str]:
     if value.strip().lower() == "all":
         return list(ALL_SPLITS)
     chosen = [s.strip() for s in value.split(",") if s.strip()]
-    bad = [s for s in chosen if s not in ALL_SPLITS]
+    # `arxiv` is accepted as a standalone OOD split alongside train/val/test.
+    valid = (*ALL_SPLITS, ARXIV_SPLIT)
+    bad = [s for s in chosen if s not in valid]
     if bad:
-        raise argparse.ArgumentTypeError(f"unknown split(s): {bad}; pick from {ALL_SPLITS}")
+        raise argparse.ArgumentTypeError(f"unknown split(s): {bad}; pick from {valid}")
     return chosen
 
 
@@ -261,6 +304,12 @@ def main() -> None:
                         help="save progress every N records (default: 25)")
     parser.add_argument("--restart", action="store_true",
                         help="ignore existing caches and rebuild from scratch")
+    parser.add_argument("--require-known-author", action="store_true",
+                        help="skip samples whose author is unknown (e.g. HC3 humans)")
+    parser.add_argument("--min-human-siblings", type=int, default=0,
+                        help="drop samples whose author contributes fewer than this many "
+                             "human texts (after rewrite-source exclusion). 2 keeps a USE-only "
+                             "set where every TRACE embedding is genuinely author-aware.")
     parser.add_argument("--out-dir", type=Path, default=paths.FEATURE_DIR,
                         help="output directory for the .npz caches")
     parser.add_argument("--data-dir", type=Path, default=None,
@@ -276,8 +325,16 @@ def main() -> None:
 
     # Load every split: the rewrite clusters for StyleDecipher are built from
     # the full dataset, regardless of which splits we are extracting.
+    # When only `arxiv` is requested, we skip loading train/val/test entirely --
+    # arxiv carries its own authors/rewrites and never participates in clusters.
+    arxiv_only = args.splits == [ARXIV_SPLIT]
     print("Loading dataset splits ...")
-    all_datasets = {sp: Dataset.load(sp, args.data_dir) for sp in ALL_SPLITS}
+    if arxiv_only:
+        all_datasets = {ARXIV_SPLIT: Dataset.from_jsonl(ARXIV_JSONL)}
+    else:
+        all_datasets = {sp: Dataset.load(sp, args.data_dir) for sp in ALL_SPLITS}
+        if ARXIV_SPLIT in args.splits:
+            all_datasets[ARXIV_SPLIT] = Dataset.from_jsonl(ARXIV_JSONL)
     for sp, ds in all_datasets.items():
         print(f"  {sp:<5} {len(ds):>6} records")
 
@@ -300,7 +357,8 @@ def main() -> None:
         stats = build_split(
             sp, all_datasets[sp], pipeline, out_dir / f"{sp}.npz",
             limit=args.limit, checkpoint_every=args.checkpoint_every,
-            restart=args.restart,
+            restart=args.restart, require_known_author=args.require_known_author,
+            min_human_siblings=args.min_human_siblings,
         )
         split_meta[sp] = stats
         print(f"  saved -> {out_dir / f'{sp}.npz'}  ({stats})\n")
@@ -309,6 +367,8 @@ def main() -> None:
         "dims": {"nela": NELA_DIM, "style": STYLE_DIM, "trace": TRACE_DIM},
         "styledecipher_mode": args.styledecipher,
         "trace_context": args.trace_context,
+        "require_known_author": args.require_known_author,
+        "min_human_siblings": args.min_human_siblings,
         "limit": args.limit,
         "seed": args.seed,
         "splits": split_meta,

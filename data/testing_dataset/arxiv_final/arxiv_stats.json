@@ -1,0 +1,16 @@
+{
+  "description": "arXiv CS abstracts test set for AI-detection (human vs 1 Claude rewrite each)",
+  "source_human": "Zenodo 7404702 (arXiv CS abstracts, 100 single-authored)",
+  "rewrite_model": "claude-haiku-4-5",
+  "rewrite_prompt": "same as main dataset (keep approximately same length)",
+  "human": 1287,
+  "ai_rewrites": 1287,
+  "total": 2574,
+  "unique_authors": 99,
+  "texts_per_author_min": 5,
+  "texts_per_author_max": 34,
+  "human_median_words": 123,
+  "rewrite_median_words": 125,
+  "split": "all 'test' (out-of-domain test set; train on main dataset)",
+  "generation_cost_usd": 1.59
+}

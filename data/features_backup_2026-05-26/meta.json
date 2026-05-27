@@ -1,0 +1,32 @@
+{
+  "dims": {
+    "nela": 87,
+    "style": 10,
+    "trace": 128
+  },
+  "styledecipher_mode": "ollama",
+  "trace_context": "single",
+  "limit": null,
+  "seed": 42,
+  "splits": {
+    "train": {
+      "records": 9265,
+      "human": 2406,
+      "ai": 6859,
+      "style_coverage": 1.0
+    },
+    "val": {
+      "records": 1846,
+      "human": 492,
+      "ai": 1354,
+      "style_coverage": 1.0
+    },
+    "test": {
+      "records": 1975,
+      "human": 517,
+      "ai": 1458,
+      "style_coverage": 1.0
+    }
+  },
+  "resplit_note": "author-disjoint (USE) + prompt-disjoint (HC3), no exact-text leakage, >=2 records per author/prompt group, seed=42"
+}

@@ -23,6 +23,18 @@ class TrainConfig:
     dropout: float = 0.3
     num_classes: int = 2                 # human (0) vs ai (1)
 
+    # --- modality dropout (multimodal-balance regularizer) -----------------
+    # Per-sample, whole-block Bernoulli dropout applied to NELA / Style / TRACE
+    # in training mode only. Defaults are intentionally **asymmetric**: NELA is
+    # dropped most often because, on this USE-only task, its 87 surface
+    # features can otherwise dominate the model. Asymmetric modality dropout
+    # forces the fusion head to also extract signal from Style + TRACE.
+    # See Neverova et al. "ModDrop" (TPAMI 2016). Set all three to 0 for an
+    # ablation run with no modality regularization.
+    modality_dropout_nela: float = 0.5
+    modality_dropout_style: float = 0.2
+    modality_dropout_trace: float = 0.2
+
     # --- optimisation ------------------------------------------------------
     epochs: int = 40
     batch_size: int = 128

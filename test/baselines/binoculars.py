@@ -30,8 +30,26 @@ from .base import BaselineDetector, DetectorResult
 
 
 class Binoculars(BaselineDetector):
+    """Binoculars detector wrapper.
+
+    Kwargs
+    ------
+    observer, performer
+        HuggingFace model IDs for the observer / performer LM pair. Must share
+        a tokenizer vocabulary (paper default: Falcon-7B + Falcon-7B-instruct).
+    device, max_length, threshold, dtype
+        Standard knobs; ``threshold`` is the operating point from the paper.
+    load_in_4bit
+        When True, both models are loaded with a ``BitsAndBytesConfig`` for
+        4-bit NF4 weights (compute dtype fp16). This drops the 7B/7B pair from
+        ~28 GB to ~8 GB GPU resident, making it fit on a 5090 (32 GB) alongside
+        other detectors. Requires ``bitsandbytes`` installed. When False (the
+        default), the existing fp16/bf16 path runs unchanged.
+    """
+
     name = "binoculars"
-    requires = ("torch", "transformers", "accelerate (recommended for 7B pair)")
+    requires = ("torch", "transformers", "accelerate (recommended for 7B pair)",
+                "bitsandbytes (for load_in_4bit=True)")
 
     def __init__(
         self,
@@ -41,6 +59,7 @@ class Binoculars(BaselineDetector):
         max_length: int = 512,
         threshold: float = 0.901,
         dtype: str = "auto",                   # "auto" | "float16" | "bfloat16" | "float32"
+        load_in_4bit: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -50,6 +69,7 @@ class Binoculars(BaselineDetector):
             max_length=max_length,
             threshold=threshold,
             dtype=dtype,
+            load_in_4bit=load_in_4bit,
             **kwargs,
         )
         self._obs = None
@@ -66,20 +86,36 @@ class Binoculars(BaselineDetector):
         from .fast_detect_gpt import _resolve_device
 
         self._device = _resolve_device(self.config["device"])
-        dtype = _resolve_dtype(self.config["dtype"], self._device)
+
+        load_kwargs_common: dict[str, Any]
+        if self.config.get("load_in_4bit"):
+            from transformers import BitsAndBytesConfig
+            quant_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+            )
+            load_kwargs_common = {"quantization_config": quant_config}
+            # bitsandbytes places weights on GPU itself; skip the .to(device) call.
+            move_to_device = False
+        else:
+            dtype = _resolve_dtype(self.config["dtype"], self._device)
+            load_kwargs_common = {"torch_dtype": dtype}
+            move_to_device = True
 
         self._obs_tok = AutoTokenizer.from_pretrained(self.config["observer"])
-        self._obs = (
-            AutoModelForCausalLM.from_pretrained(self.config["observer"], torch_dtype=dtype)
-            .to(self._device)
-            .eval()
+        obs = AutoModelForCausalLM.from_pretrained(
+            self.config["observer"], **load_kwargs_common
         )
+        if move_to_device:
+            obs = obs.to(self._device)
+        self._obs = obs.eval()
         self._perf_tok = AutoTokenizer.from_pretrained(self.config["performer"])
-        self._perf = (
-            AutoModelForCausalLM.from_pretrained(self.config["performer"], torch_dtype=dtype)
-            .to(self._device)
-            .eval()
+        perf = AutoModelForCausalLM.from_pretrained(
+            self.config["performer"], **load_kwargs_common
         )
+        if move_to_device:
+            perf = perf.to(self._device)
+        self._perf = perf.eval()
         # Binoculars requires both models share a tokenizer (per the paper); if
         # they do not, cross-perplexity is ill-defined. The default Falcon pair
         # satisfies this; for ad-hoc smaller pairs the user must verify.

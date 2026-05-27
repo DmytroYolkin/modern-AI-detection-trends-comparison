@@ -33,21 +33,65 @@ The whole flow uses **tmux** so the long-running Ollama server and the
 extraction job survive SSH disconnects / browser-tab closes. tmux is
 pre-installed on the RunPod PyTorch template; if not, `apt-get update && apt-get install -y tmux`.
 
+### 2.1 Clone the repo
+
+The arxiv data, the `--splits arxiv` wiring, and this doc are all committed to
+GitHub — just clone it on the pod:
+
 ```bash
-# --- 2.1 repo -------------------------------------------------------------
 cd /workspace
-git clone <git-remote> modern-AI-detection-trends-comparison
+git clone https://github.com/DmytroYolkin/modern-AI-detection-trends-comparison.git
 cd modern-AI-detection-trends-comparison
 
-# --- 2.2 python deps ------------------------------------------------------
+# sanity-check the two files the run actually depends on
+ls -la data/testing_dataset/arxiv_final/arxiv_merged.jsonl
+grep -c "ARXIV_SPLIT" training/build_dataset.py            # expect 1+
+```
+
+> If you have **uncommitted** local changes you want on the pod, push them
+> first (preferred) — or fall back to the `runpodctl send` upload pattern
+> below.
+>
+> <details><summary>Upload-instead recovery (only if you can't push)</summary>
+>
+> On your local Windows machine (PowerShell):
+> ```powershell
+> cd "C:\path\to\repo"
+> iwr https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe -OutFile runpodctl.exe
+> C:\Windows\System32\tar.exe -czf repo-min.tar.gz extractors training fusion data/preprocessing data/testing_dataset/arxiv_final/arxiv_merged.jsonl
+> .\runpodctl.exe send repo-min.tar.gz
+> ```
+> Copy the one-shot code from the output, then on the pod:
+> ```bash
+> cd /workspace
+> runpodctl receive <paste-code>
+> mkdir -p modern-AI-detection-trends-comparison
+> tar -xzf repo-min.tar.gz -C modern-AI-detection-trends-comparison
+> cd modern-AI-detection-trends-comparison
+> ```
+> </details>
+
+### 2.2 Python deps
+
+This repo has no `requirements.txt`; the install list lives in
+[../README.md](../README.md):
+
+```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install pandas numpy nltk nela_features
+pip install sentence-transformers scikit-learn python-Levenshtein
+pip install torch transformers spacy
+pip install xgboost joblib tqdm
+pip install ollama
 
 # pre-fetch the two tokenisation resources the extractors require at runtime
 python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
 python -m spacy download en_core_web_sm
+```
 
-# --- 2.3 ollama install ---------------------------------------------------
+### 2.3 Ollama install
+
+```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 

@@ -1,0 +1,16 @@
+{
+  "detect_gpt": {
+    "scoring_model": "EleutherAI/gpt-neo-2.7B",
+    "mask_filling_model": "t5-large",
+    "n_perturbations": 100
+  },
+  "fast_detect_gpt": {
+    "scoring_model": "EleutherAI/gpt-neo-2.7B",
+    "reference_model": "EleutherAI/gpt-j-6B"
+  },
+  "binoculars": {
+    "observer": "tiiuae/falcon-7b",
+    "performer": "tiiuae/falcon-7b-instruct",
+    "load_in_4bit": true
+  }
+}

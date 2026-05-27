@@ -139,6 +139,11 @@ def _summarise(detector_name: str, results: list[DetectorResult], records: list[
         "n_records": len(records),
         "wall_seconds": round(wall_seconds, 2),
         "config": describe,
+        # per-sample scores + ids so downstream eval can rebuild ROC / score-dist
+        "ids": [str(r.get("id", i)) for i, r in enumerate(records)],
+        "y_true": y_true.tolist(),
+        "y_pred": y_pred.tolist(),
+        "y_scores": scores.tolist(),
     }
     try:
         out["test"] = {
@@ -205,9 +210,24 @@ def main() -> None:
                         help="list every registered detector and exit")
     parser.add_argument("--split", default="test", choices=("train", "val", "test"))
     parser.add_argument("--data-root", type=Path, default=Path("data/dataset_ready_final"))
+    parser.add_argument("--input-jsonl", type=Path, default=None,
+                        help="explicit JSONL file to score; overrides --split + --data-root. "
+                             "Output filenames are prefixed with the input stem so multiple "
+                             "input sets do not overwrite each other.")
     parser.add_argument("--output", type=Path, default=Path("models/baseline_results"))
     parser.add_argument("--limit", type=int, default=None,
                         help="only score the first N records (smoke test)")
+    parser.add_argument("--detector-config", type=Path, default=None,
+                        help="JSON file mapping detector name -> kwargs passed to its "
+                             "constructor. Shape: {detector_name: {kwarg: value, ...}}. "
+                             "Unknown detector names are silently ignored; a missing "
+                             "file or empty config leaves the wrappers at their defaults.")
+    parser.add_argument("--skip-if-exists", action="store_true",
+                        help="resume mode: if a detector's output JSON already exists "
+                             "at the target path AND parses to a successful run (has a "
+                             "'test' block, no 'error' field), skip that detector. "
+                             "Lets a pod-level rerun continue from where it stopped "
+                             "without redoing already-completed detectors.")
     args = parser.parse_args()
 
     if args.list:
@@ -219,7 +239,14 @@ def main() -> None:
     if n_env:
         print(f"Loaded {n_env} variable(s) from .env")
 
-    split_path = args.data_root / f"{args.split}.jsonl"
+    # --input-jsonl overrides --split + --data-root; output files are then
+    # prefixed with the input stem so multiple input sets don't collide.
+    if args.input_jsonl is not None:
+        split_path = args.input_jsonl
+        out_prefix = f"{split_path.stem}__"
+    else:
+        split_path = args.data_root / f"{args.split}.jsonl"
+        out_prefix = ""
     if not split_path.exists():
         raise SystemExit(f"split file not found: {split_path}")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -227,12 +254,40 @@ def main() -> None:
     records = list(_iter_records(split_path, args.limit))
     print(f"Loaded {len(records)} records from {split_path}")
 
+    # --detector-config: per-detector kwargs JSON. Unrecognised detector names
+    # are ignored (allowing a single config file to cover the whole registry
+    # even when only a subset is being run).
+    detector_config: dict[str, dict] = {}
+    if args.detector_config is not None:
+        if not args.detector_config.exists():
+            raise SystemExit(f"--detector-config file not found: {args.detector_config}")
+        try:
+            detector_config = json.loads(args.detector_config.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"--detector-config invalid JSON: {e}")
+        if not isinstance(detector_config, dict):
+            raise SystemExit("--detector-config root must be a JSON object "
+                             "({detector_name: {kwarg: value, ...}})")
+        print(f"Loaded detector config for: {sorted(detector_config.keys())}")
+
     for name in _resolve_detectors(args.detectors):
-        out_path = args.output / f"{name}.metrics.json"
+        out_path = args.output / f"{out_prefix}{name}.metrics.json"
         print(f"\n=== {name} ===")
+        if args.skip_if_exists and out_path.exists():
+            try:
+                prev = json.loads(out_path.read_text(encoding="utf-8"))
+                if "test" in prev and "error" not in prev:
+                    print(f"  --skip-if-exists: {out_path.name} already complete; skipping")
+                    continue
+                print(f"  --skip-if-exists: existing {out_path.name} is incomplete; re-running")
+            except Exception:
+                print(f"  --skip-if-exists: existing {out_path.name} is unreadable; re-running")
         try:
             cls = get_detector(name)
-            detector: BaselineDetector = cls()
+            overrides = detector_config.get(name, {}) or {}
+            if overrides:
+                print(f"  applying config overrides: {overrides}")
+            detector: BaselineDetector = cls(**overrides)
             detector.load()
             start = time.time()
             results = list(detector.predict_batch(r["text"] for r in records))

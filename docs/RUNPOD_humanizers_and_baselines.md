@@ -75,14 +75,20 @@ pip install hf_transfer            # faster HF downloads
 pip install requests bitsandbytes  # for Binoculars / RADAR / R-Detect
 
 python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
-python -m spacy download en_core_web_sm || true
+# spaCy is NOT required on pod #2 -- NELA's spaCy dependency is only used
+# during feature extraction, which runs on pod #1. Humanizers + baselines
+# do not touch spaCy.
 ```
 
 ### 2.3 HuggingFace login
 
 ```bash
-huggingface-cli login   # paste HF_TOKEN; required for gated Meta-LLaMA-3
+hf auth login   # paste HF_TOKEN; required for gated Meta-LLaMA-3
 ```
+
+(The legacy `huggingface-cli login` is deprecated as of late 2025; the new
+binary is `hf`. Both ship with the same `huggingface_hub` pip install, so
+no extra install needed.)
 
 ### 2.4 Ollama install + start (needed only by RAIDAR baseline at §5)
 
@@ -126,6 +132,8 @@ same command and it picks up where it stopped:
 - The merge step is idempotent.
 - `compare_baselines.py --skip-if-exists` skips detectors whose successful
   output JSON already exists.
+
+*(If the pipeline is currently running but a humanizer failed and it incorrectly moved on, kill it with `tmux kill-session -t pipeline` and then re-run the command below. It will safely skip what's already done.)*
 
 ```bash
 tmux new-session -d -s pipeline \

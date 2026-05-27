@@ -43,12 +43,12 @@ stage() {
 # --- Stage 1: Adversarial Paraphrasing humanizer (resumable) ---------------
 stage "Stage 1/5 -- Adversarial Paraphrasing humanizer"
 python scripts/humanize_arxiv_adversarial.py --device cuda \
-    || echo "[WARN] stage 1 returned non-zero; continuing with whatever it wrote"
+    || { echo "[FATAL] stage 1 returned non-zero; aborting so you can fix it"; exit 1; }
 
 # --- Stage 2: TempParaphraser humanizer (resumable) ------------------------
 stage "Stage 2/5 -- TempParaphraser humanizer"
 python scripts/humanize_arxiv_temppara.py --device cuda \
-    || echo "[WARN] stage 2 returned non-zero; continuing with whatever it wrote"
+    || { echo "[FATAL] stage 2 returned non-zero; aborting so you can fix it"; exit 1; }
 
 # --- Stage 3: Merge into eval sets (idempotent) ----------------------------
 stage "Stage 3/5 -- Merge humanized + humans into eval sets"

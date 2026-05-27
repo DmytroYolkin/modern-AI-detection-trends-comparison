@@ -106,33 +106,43 @@ class AdvParaphraser:
         self.beam_size = beam_size
         self._impl = None
 
+    def _build_guidance_classifier(self, utils_mod):
+        """Map local guidance-classifier names onto the upstream detector objects."""
+        name = self.guidance_classifier
+        if name in {"roberta-large-openai-detector", "openai_roberta_large"}:
+            return utils_mod.OpenAIRoberta(model_name="openai_roberta_large")
+        if name == "openai_roberta_base":
+            return utils_mod.OpenAIRoberta(model_name="openai_roberta_base")
+        if name == "radar":
+            return utils_mod.RADAR()
+        if name == "mage":
+            return utils_mod.MAGEDetector()
+        raise ValueError(
+            f"Unsupported guidance classifier {name!r}; expected one of "
+            "roberta-large-openai-detector, openai_roberta_large, "
+            "openai_roberta_base, radar, or mage"
+        )
+
     def load(self) -> None:
         """Import the upstream module and instantiate the underlying pipeline."""
         # Make the cloned repo importable.
         if str(self.repo_dir) not in sys.path:
             sys.path.insert(0, str(self.repo_dir))
 
-        # The exact symbol name depends on the upstream layout. Adv-P's repo
-        # at commit time of writing exposes its core in `paraphrase.py` /
-        # `attack/paraphrase.py`. We try the most plausible import paths and
-        # raise a clear error if none work so the user can debug on the pod.
+        # The upstream implementation lives in `utils.py` as `Paraphraser`.
+        # Keep a tiny candidate list so minor layout changes are easy to adapt.
         candidates = [
-            ("paraphrase", "AdversarialParaphraser"),
-            ("attack.paraphrase", "AdversarialParaphraser"),
-            ("src.paraphrase", "AdversarialParaphraser"),
-            ("adversarial_paraphrasing", "AdversarialParaphraser"),
+            ("utils", "Paraphraser"),
         ]
         last_err: Exception | None = None
         for mod_name, cls_name in candidates:
             try:
                 mod = __import__(mod_name, fromlist=[cls_name])
                 cls = getattr(mod, cls_name)
+                guidance_classifier = self._build_guidance_classifier(mod)
                 self._impl = cls(
-                    rewriter_model=self.rewriter_model,
-                    guidance_classifier=self.guidance_classifier,
-                    device=self.device,
-                    max_new_tokens=self.max_new_tokens,
-                    beam_size=self.beam_size,
+                    name=self.rewriter_model,
+                    classifier=guidance_classifier,
                 )
                 print(f"[adv] loaded {mod_name}.{cls_name}")
                 return

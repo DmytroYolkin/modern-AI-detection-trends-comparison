@@ -68,8 +68,8 @@ grep -c '"source": "arxiv_rewrite"' data/testing_dataset/arxiv_final/arxiv_merge
 ```bash
 pip install --upgrade pip
 pip install pandas numpy nltk tqdm
-pip install torch transformers accelerate sentencepiece
-pip install scikit-learn
+pip install torch "transformers<5.5.0" accelerate sentencepiece
+pip install scikit-learn clean-text regex
 pip install hf_transfer            # faster HF downloads
 # detector-specific extras (only needed for §5)
 pip install requests bitsandbytes  # for Binoculars / RADAR / R-Detect

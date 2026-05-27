@@ -167,9 +167,16 @@ class AdvParaphraser:
     def paraphrase(self, text: str) -> str:
         if self._impl is None:
             raise RuntimeError("AdvParaphraser.load() was not called")
-        # We assume the upstream class exposes a `.paraphrase(text) -> str`
-        # method. If it instead returns a dict, unwrap the relevant field.
-        out = self._impl.paraphrase(text)
+        
+        # The upstream code expects a list of strings
+        # and hardcodes top_k = 50. We override it with our beam_size.
+        if hasattr(self._impl, "model") and hasattr(self._impl.model, "generation_config"):
+            self._impl.model.generation_config.top_k = self.beam_size
+            
+        out = self._impl.paraphrase([text], max_new_tokens=self.max_new_tokens)
+        
+        if isinstance(out, list):
+            out = out[0]
         if isinstance(out, dict):
             return out.get("text") or out.get("output") or out.get("paraphrased") or ""
         return str(out)

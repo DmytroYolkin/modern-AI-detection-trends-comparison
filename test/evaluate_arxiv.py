@@ -173,14 +173,12 @@ def _run_in_house(model_path: Path, npz_path: Path, device: str) -> dict:
 
     ds = FusionFeatureDataset(npz_path)
     if normalizer is not None:
-        # The normalizer was fitted on the train cache with the same dims as
-        # the model. Single-modality classical models carry a normalizer that
-        # expects only their block(s); calling ``apply_normalizer`` would
-        # mismatch because ``ds`` carries all three blocks. The classical
-        # path below slices the relevant blocks itself, so leave the cache
-        # un-normalised in that case and rely on the in-block scaling.
-        if is_neural or set(payload.get("dims") or {}) == {"nela", "style", "trace"}:
-            ds.apply_normalizer(normalizer)
+        # The normalizer was fit on the *full* train cache (all 3 blocks) and
+        # then applied to all 3 blocks before the single-modality slicing in
+        # train_classical.py. So even single-modality classifiers carry a
+        # 3-block normalizer; apply it unconditionally and let the classical
+        # path below slice the normalised cache down to its model's blocks.
+        ds.apply_normalizer(normalizer)
 
     y_true = ds.labels
     if is_neural:

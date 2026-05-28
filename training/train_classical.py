@@ -32,8 +32,11 @@ from training.classical import (
     ClassicalClassifier,
     block_importances,
     flatten_features,
+    select_blocks,
 )
 from training.feature_dataset import FeatureNormalizer, FusionFeatureDataset
+
+VALID_BLOCKS = ("nela", "style", "trace")
 
 LABEL_NAMES = ("human", "ai")
 
@@ -103,6 +106,13 @@ def main() -> None:
     parser.add_argument("--no-normalize", action="store_true",
                         help="disable feature standardisation")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--feature-blocks", default=None,
+        help='Comma-separated subset of {nela,style,trace}. When set, the '
+             'classifier is trained only on those feature blocks and saved '
+             'with reduced "dims" -- e.g. --feature-blocks nela trains a '
+             'NELA-only model (87-dim input) for per-modality ablation.',
+    )
     args = parser.parse_args()
 
     train_npz = args.feature_dir / "train.npz"
@@ -123,9 +133,19 @@ def main() -> None:
         train_ds.apply_normalizer(normalizer)
         val_ds.apply_normalizer(normalizer)
 
-    X_train = flatten_features(train_ds.nela, train_ds.style, train_ds.trace)
+    if args.feature_blocks:
+        requested = tuple(b.strip() for b in args.feature_blocks.split(",") if b.strip())
+        bad = [b for b in requested if b not in VALID_BLOCKS]
+        if bad:
+            raise SystemExit(f"unknown feature block(s): {bad}; pick from {VALID_BLOCKS}")
+        X_train = select_blocks(train_ds.nela, train_ds.style, train_ds.trace, requested)
+        X_val = select_blocks(val_ds.nela, val_ds.style, val_ds.trace, requested)
+        dims = {b: dims[b] for b in VALID_BLOCKS if b in requested}
+        print(f"Restricted to feature blocks: {requested}")
+    else:
+        X_train = flatten_features(train_ds.nela, train_ds.style, train_ds.trace)
+        X_val = flatten_features(val_ds.nela, val_ds.style, val_ds.trace)
     y_train = train_ds.labels
-    X_val = flatten_features(val_ds.nela, val_ds.style, val_ds.trace)
     y_val = val_ds.labels
 
     print(f"Feature dims: {dims}  ->  flattened input width = {X_train.shape[1]}")
@@ -149,6 +169,8 @@ def main() -> None:
         base = args.name or f"clf_{backend}"
         if args.classifier == "all" and args.name:
             base = f"{args.name}_{backend}"
+        if args.feature_blocks and args.name is None:
+            base = f"{base}_{'_'.join(b.strip() for b in args.feature_blocks.split(','))}"
         out_path = args.out_dir / f"{base}.joblib"
         try:
             metrics = train_one(

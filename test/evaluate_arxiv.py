@@ -53,7 +53,7 @@ from sklearn.metrics import (
 )
 
 from training import paths
-from training.classical import ClassicalClassifier, flatten_features
+from training.classical import ClassicalClassifier, flatten_features, select_blocks
 from training.feature_dataset import FeatureNormalizer, FusionFeatureDataset
 from training.model import FusionClassifier
 
@@ -143,8 +143,19 @@ def _predict_neural(model, ds, device, batch_size: int = 256):
     return np.concatenate(preds), np.concatenate(probs)
 
 
-def _predict_classical(clf, ds):
-    X = flatten_features(ds.nela, ds.style, ds.trace)
+def _predict_classical(clf, ds, payload: dict):
+    """Predict + return ai-class probabilities for a classical model.
+
+    Reads ``payload["dims"]`` to know which feature blocks the model was
+    trained on -- single-modality models (e.g. ``clf_random_forest_nela``)
+    were saved with ``dims = {"nela": 87}`` only, and slicing the cache to
+    those blocks is what makes the wrapper checkpoint-agnostic.
+    """
+    dims = payload.get("dims") or {"nela": ds.nela.shape[1],
+                                   "style": ds.style.shape[1],
+                                   "trace": ds.trace.shape[1]}
+    blocks = tuple(b for b in ("nela", "style", "trace") if b in dims)
+    X = select_blocks(ds.nela, ds.style, ds.trace, blocks)
     return clf.predict(X), clf.predict_proba(X)[:, 1]
 
 
@@ -162,13 +173,20 @@ def _run_in_house(model_path: Path, npz_path: Path, device: str) -> dict:
 
     ds = FusionFeatureDataset(npz_path)
     if normalizer is not None:
-        ds.apply_normalizer(normalizer)
+        # The normalizer was fitted on the train cache with the same dims as
+        # the model. Single-modality classical models carry a normalizer that
+        # expects only their block(s); calling ``apply_normalizer`` would
+        # mismatch because ``ds`` carries all three blocks. The classical
+        # path below slices the relevant blocks itself, so leave the cache
+        # un-normalised in that case and rely on the in-block scaling.
+        if is_neural or set(payload.get("dims") or {}) == {"nela", "style", "trace"}:
+            ds.apply_normalizer(normalizer)
 
     y_true = ds.labels
     if is_neural:
         y_pred, y_score = _predict_neural(model, ds, device)
     else:
-        y_pred, y_score = _predict_classical(model, ds)
+        y_pred, y_score = _predict_classical(model, ds, payload)
     return {
         "y_true": y_true,
         "y_pred": y_pred,
@@ -306,8 +324,17 @@ def _merge_humanized_with_clean_humans(
         # downstream `_baseline_to_metrics` ingestion picks up real values
         # rather than the AI-only payload.
         y_true_arr = np.asarray(m_true, dtype=int)
-        y_pred_arr = np.asarray(m_pred, dtype=int)
         y_score_arr = np.asarray(m_score, dtype=float)
+        # Recompute hard labels at the strict-FPR<=1% operating point so the
+        # merged baseline payload reports the same regime as the in-house
+        # models (rather than carrying the original 0.5-threshold y_pred
+        # straight through from compare_baselines).
+        if len(set(m_true)) > 1:
+            y_pred_arr, op_info = _predict_at_strict_fpr(y_true_arr, y_score_arr, max_fpr=0.01)
+        else:
+            y_pred_arr = np.asarray(m_pred, dtype=int)
+            op_info = {"fpr_target": 0.01, "achieved": False,
+                       "reason": "single-class eval set"}
         try:
             roc = float(roc_auc_score(y_true_arr, y_score_arr)) \
                 if len(set(m_true)) > 1 else None
@@ -321,8 +348,13 @@ def _merge_humanized_with_clean_humans(
             "per_class": _per_class_report(y_true_arr, y_pred_arr),
             "confusion_matrix": confusion_matrix(
                 y_true_arr, y_pred_arr, labels=[0, 1]).tolist(),
+            "operating_point": op_info,
             "strict_fpr_1pct": _strict_fpr_threshold(y_score_arr, y_true_arr, 0.01),
         }
+        # Reflect the re-thresholded predictions back into per-sample arrays
+        # so any downstream consumer (per-source breakdown, score plots) sees
+        # the same operating point.
+        m_pred = y_pred_arr.tolist()
         # per-source map: build from the humanized records JSONL when available,
         # otherwise fall back to the union of clean + humanized records.
         per_source: dict[str, dict] = {}
@@ -387,6 +419,44 @@ def _strict_fpr_threshold(scores: np.ndarray, y: np.ndarray, max_fpr: float = 0.
     return best or {}
 
 
+def _predict_at_strict_fpr(
+    y_true: np.ndarray, y_score: np.ndarray, max_fpr: float = 0.01,
+) -> tuple[np.ndarray, dict]:
+    """Re-threshold ``y_score`` at the strictest cutoff with FPR <= max_fpr.
+
+    Returns ``(y_pred_strict, operating_point_info)``. When no threshold
+    satisfies the constraint (e.g. the score distribution is too coarse or
+    one class is missing), falls back to the default ``score >= 0.5`` decision
+    and reports ``achieved=False`` so the operating point is visible in the
+    report.
+
+    Used to enforce the project's FPR <= 1% deployment regime on every
+    headline metric (acc, macroF1, per-class P/R/F1, confusion matrix), not
+    just the dedicated strict-FPR row in the summary.
+    """
+    info: dict = {"fpr_target": max_fpr}
+    if y_score is None:
+        return None, {**info, "achieved": False, "reason": "no scores"}
+    sf = _strict_fpr_threshold(np.asarray(y_score), np.asarray(y_true), max_fpr=max_fpr)
+    if sf and "threshold" in sf:
+        y_pred = (np.asarray(y_score) >= sf["threshold"]).astype(int)
+        info.update({
+            "threshold": float(sf["threshold"]),
+            "achieved": True,
+            "test_tpr": sf["test_tpr"],
+            "test_precision": sf["test_precision"],
+            "test_fpr": sf["test_fpr"],
+        })
+        return y_pred, info
+    y_pred = (np.asarray(y_score) >= 0.5).astype(int)
+    info.update({
+        "threshold": 0.5,
+        "achieved": False,
+        "reason": "no threshold meets the FPR constraint -- reporting at default 0.5",
+    })
+    return y_pred, info
+
+
 def _per_class_report(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     rep = classification_report(
         y_true, y_pred, target_names=["human", "ai"], output_dict=True, zero_division=0,
@@ -398,13 +468,30 @@ def _per_class_report(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 
 def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_score: np.ndarray | None,
-                     sources: np.ndarray | list[str] | None) -> dict:
+                     sources: np.ndarray | list[str] | None,
+                     *, max_fpr: float = 0.01) -> dict:
+    """All headline numbers are computed at the strictest threshold whose
+    eval-set FPR <= ``max_fpr`` (default 1%). When the score distribution can't
+    satisfy that constraint, falls back to the default 0.5 threshold and the
+    ``operating_point.achieved=False`` flag is set so the report can warn.
+
+    The ``y_pred`` argument is the model's default (argmax / 0.5) prediction
+    and is used only as the operating-point fallback when no scores are
+    available -- otherwise it is overridden by the strict-FPR threshold.
+    """
+    y_true = np.asarray(y_true)
+    op_info: dict = {"fpr_target": max_fpr, "achieved": False,
+                     "threshold": None, "fallback": "argmax"}
+    if y_score is not None and len(set(y_true.tolist())) > 1:
+        y_pred, op_info = _predict_at_strict_fpr(y_true, np.asarray(y_score), max_fpr=max_fpr)
+
     out: dict = {
         "n": int(len(y_true)),
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
         "per_class": _per_class_report(y_true, y_pred),
         "confusion_matrix": confusion_matrix(y_true, y_pred, labels=[0, 1]).tolist(),
+        "operating_point": op_info,
     }
     if y_score is not None and len(set(y_true.tolist())) > 1:
         try:
@@ -412,7 +499,7 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_score: np.ndarray
         except Exception:
             out["roc_auc"] = None
         out["strict_fpr_1pct"] = _strict_fpr_threshold(np.asarray(y_score),
-                                                       np.asarray(y_true), 0.01)
+                                                       np.asarray(y_true), max_fpr)
     else:
         out["roc_auc"] = None
         out["strict_fpr_1pct"] = {}
@@ -827,13 +914,26 @@ def _report_md(out_dir: Path,
     # --- 8. Methodology footnote -------------------------------------------
     md.append("## 8. Methodology footnote")
     md.append("")
+    md.append("**Operating point.** All headline metrics in this report "
+              "(accuracy, macroF1, per-class P/R/F1, confusion matrix, "
+              "per-source accuracy) are computed at the **strictest threshold "
+              "on the eval set itself whose human-class false-positive rate "
+              "is ≤ 1 %** (METHODOLOGY.md §6.2). This matches the project's "
+              "deployment regime where a false positive on a human text is "
+              "much more costly than a false negative. The model's default "
+              "argmax / 0.5-threshold prediction is *not* used unless the "
+              "score distribution can't satisfy the FPR constraint, in which "
+              "case `operating_point.achieved=False` appears in the per-detector "
+              "JSON and that row is also called out in §7.")
+    md.append("")
     md.append("- **accuracy** -- fraction of records whose predicted label matches the gold.")
     md.append("- **macroF1** -- unweighted mean of per-class F1 (human, ai).")
-    md.append("- **ROC-AUC** -- area under the ROC of the ai-class score; "
+    md.append("- **ROC-AUC** -- threshold-free area under the ROC of the ai-class score; "
               "`null` when one class is missing from the eval set.")
-    md.append("- **strict-FPR@1% TPR** -- TPR at the lowest threshold that keeps "
-              "human-class false-positive rate ≤ 1% (METHODOLOGY.md §6.2). "
-              "Empty when no such threshold exists.")
+    md.append("- **strict-FPR@1% TPR** -- TPR at the threshold described above. "
+              "Redundant with the headline metrics by construction but kept as "
+              "an explicit column for cross-reference with the in-distribution "
+              "test-set tables.")
     md.append("- **per-source accuracy** -- accuracy restricted to records whose "
               "`source` field equals the given corpus; reveals per-humanizer attack success.")
     md.append("")
@@ -903,16 +1003,28 @@ def _collect_results(features_path: Path | None,
         if baselines:
             print(f"[{log_prefix}] loaded {len(baselines)} baseline JSON(s) from {baselines_dir}")
     for name, payload in baselines.items():
-        m = _baseline_to_metrics(payload)
-        metrics[name] = m
-        # newer `compare_baselines.py` runs persist per-sample arrays; when
-        # present, lift them into `raw` so the baseline joins ROC + score-dist.
         y_true_b = payload.get("y_true")
         y_scores_b = payload.get("y_scores")
         if y_true_b is not None and y_scores_b is not None \
                 and len(y_true_b) == len(y_scores_b):
-            raw[name] = (np.asarray(y_true_b, dtype=int),
-                         np.asarray(y_scores_b, dtype=float))
+            # Per-sample arrays present -- recompute everything at the
+            # strict-FPR operating point so the baseline row uses the same
+            # regime as the in-house models. The `y_pred` we pass is just a
+            # placeholder; ``_compute_metrics`` will override it from the
+            # strict-FPR threshold on ``y_scores_b``.
+            yt = np.asarray(y_true_b, dtype=int)
+            ys = np.asarray(y_scores_b, dtype=float)
+            yp_placeholder = (ys >= 0.5).astype(int)
+            # source labels: prefer payload-supplied per-sample sources;
+            # otherwise fall back to None (per_source breakdown skipped).
+            srcs = payload.get("sources")
+            m = _compute_metrics(yt, yp_placeholder, ys, srcs, max_fpr=0.01)
+            metrics[name] = m
+            raw[name] = (yt, ys)
+        else:
+            # Pre-baked metrics only (older payload or merged-humanized
+            # block that already re-thresholded). Use as-is.
+            metrics[name] = _baseline_to_metrics(payload)
     return metrics, raw
 
 

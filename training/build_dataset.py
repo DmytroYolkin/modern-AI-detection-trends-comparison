@@ -52,10 +52,21 @@ from training.extractor_pipeline import FeaturePipeline
 
 LABEL_TO_INDEX = {"human": 0, "ai": 1}
 ALL_SPLITS = ("train", "val", "test")
-# "arxiv" is an out-of-distribution test split (`data/testing_dataset/arxiv_final/`)
-# kept OUT of ALL_SPLITS so training flows never see it; only built when asked.
+# Out-of-distribution evaluation splits. Each is wired in as a standalone split
+# (name -> jsonl path) that is loaded only when explicitly requested via
+# --splits. They are kept OUT of ALL_SPLITS so training flows never see them.
+#
+# - "arxiv"           : 2 574 rows -- 1 287 humans + 1 287 Claude-haiku rewrites.
+# - "arxiv_humanized" : 3 861 rows -- the same 1 287 humans + 2 574 humanized AI
+#                       rows (Adversarial Paraphrasing + TempParaphraser, 1 287
+#                       each), produced by the pod-2 humanization pipeline.
+OOD_SPLITS: dict[str, Path] = {
+    "arxiv": paths.REPO_ROOT / "data" / "testing_dataset" / "arxiv_final" / "arxiv_merged.jsonl",
+    "arxiv_humanized": paths.REPO_ROOT / "data" / "testing_dataset" / "arxiv_final" / "arxiv_eval_with_humanizers.jsonl",
+}
+# Back-compat aliases (other modules still import these by name).
 ARXIV_SPLIT = "arxiv"
-ARXIV_JSONL = paths.REPO_ROOT / "data" / "testing_dataset" / "arxiv_final" / "arxiv_merged.jsonl"
+ARXIV_JSONL = OOD_SPLITS["arxiv"]
 
 NELA_DIM = FeaturePipeline.NELA_DIM
 STYLE_DIM = FeaturePipeline.STYLE_DIM
@@ -280,8 +291,8 @@ def _parse_splits(value: str) -> list[str]:
     if value.strip().lower() == "all":
         return list(ALL_SPLITS)
     chosen = [s.strip() for s in value.split(",") if s.strip()]
-    # `arxiv` is accepted as a standalone OOD split alongside train/val/test.
-    valid = (*ALL_SPLITS, ARXIV_SPLIT)
+    # Any registered OOD split is accepted alongside train/val/test.
+    valid = (*ALL_SPLITS, *OOD_SPLITS)
     bad = [s for s in chosen if s not in valid]
     if bad:
         raise argparse.ArgumentTypeError(f"unknown split(s): {bad}; pick from {valid}")
@@ -325,16 +336,18 @@ def main() -> None:
 
     # Load every split: the rewrite clusters for StyleDecipher are built from
     # the full dataset, regardless of which splits we are extracting.
-    # When only `arxiv` is requested, we skip loading train/val/test entirely --
-    # arxiv carries its own authors/rewrites and never participates in clusters.
-    arxiv_only = args.splits == [ARXIV_SPLIT]
+    # When only OOD split(s) are requested, we skip loading train/val/test
+    # entirely -- each OOD split carries its own authors/rewrites and never
+    # participates in clusters.
+    requested_ood = [s for s in args.splits if s in OOD_SPLITS]
+    ood_only = bool(requested_ood) and all(s in OOD_SPLITS for s in args.splits)
     print("Loading dataset splits ...")
-    if arxiv_only:
-        all_datasets = {ARXIV_SPLIT: Dataset.from_jsonl(ARXIV_JSONL)}
+    if ood_only:
+        all_datasets = {s: Dataset.from_jsonl(OOD_SPLITS[s]) for s in requested_ood}
     else:
         all_datasets = {sp: Dataset.load(sp, args.data_dir) for sp in ALL_SPLITS}
-        if ARXIV_SPLIT in args.splits:
-            all_datasets[ARXIV_SPLIT] = Dataset.from_jsonl(ARXIV_JSONL)
+        for s in requested_ood:
+            all_datasets[s] = Dataset.from_jsonl(OOD_SPLITS[s])
     for sp, ds in all_datasets.items():
         print(f"  {sp:<5} {len(ds):>6} records")
 

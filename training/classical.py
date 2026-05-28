@@ -38,15 +38,41 @@ def block_importances(importances: np.ndarray, dims: dict) -> dict:
 
     Answers "how much does each extractor contribute?" -- the comparison this
     whole repo is about.
+
+    Tolerant of single-block ``dims`` (e.g. ``{"nela": 87}`` for a
+    NELA-only classifier): missing blocks are skipped and the surviving
+    fractions still sum to ~1.0 across the present blocks.
     """
     order = ("nela", "style", "trace")
     out, start = {}, 0
     total = float(np.sum(np.abs(importances))) or 1.0
     for name in order:
+        if name not in dims:
+            continue
         width = dims[name]
         out[name] = float(np.sum(np.abs(importances[start:start + width])) / total)
         start += width
     return out
+
+
+def select_blocks(
+    nela: np.ndarray, style: np.ndarray, trace: np.ndarray,
+    blocks: tuple[str, ...] | list[str],
+) -> np.ndarray:
+    """Concatenate just the requested feature blocks, in canonical order.
+
+    Used to train and evaluate single-modality (or 2-of-3-modality) classifiers
+    without padding the missing blocks with zeros -- the saved model's input
+    width then genuinely matches its training dims.
+    """
+    table = {"nela": nela, "style": style, "trace": trace}
+    parts: list[np.ndarray] = []
+    for name in ("nela", "style", "trace"):
+        if name in blocks:
+            parts.append(np.asarray(table[name], np.float32))
+    if not parts:
+        raise ValueError(f"no blocks selected from {blocks!r}")
+    return np.concatenate(parts, axis=1).astype(np.float32)
 
 
 def _build_estimator(backend: str, seed: int, overrides: dict):

@@ -201,6 +201,93 @@ def _resolve_detectors(arg: str) -> list[str]:
     return names
 
 
+def _score_with_checkpoint(detector: BaselineDetector, records: list[dict],
+                           progress_path: Path, checkpoint_every: int
+                           ) -> list[DetectorResult]:
+    """Score ``records`` with per-record JSONL checkpoints for crash-resume.
+
+    Reads ``progress_path`` first to discover which record ids are already
+    scored. Skips those. For the remaining records, scores each via
+    ``detector.predict_batch`` and appends a JSON line per record:
+    ``{"id": str, "y_true": int, "y_pred": int, "y_score": float, "raw": {}}``.
+    Flushes + ``fsync``'s the sidecar every ``checkpoint_every`` records so a
+    crash loses at most ``checkpoint_every - 1`` records of work.
+
+    The returned ``DetectorResult`` list is in the original ``records`` order
+    (cached results interleaved with newly-scored ones).
+    """
+    done_by_id: dict[str, dict] = {}
+    if progress_path.exists():
+        with progress_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                    done_by_id[str(e["id"])] = e
+                except (json.JSONDecodeError, KeyError):
+                    pass  # tolerate a partial last line from the crash
+        print(f"  --checkpoint-every: resuming with {len(done_by_id)} record(s) "
+              f"cached from {progress_path.name}")
+
+    results: list[DetectorResult | None] = [None] * len(records)
+    pending_idx: list[int] = []
+    for i, r in enumerate(records):
+        rid = str(r.get("id", i))
+        cached = done_by_id.get(rid)
+        if cached is not None:
+            results[i] = DetectorResult(
+                score_ai=float(cached["y_score"]),
+                label="ai" if int(cached["y_pred"]) == 1 else "human",
+                raw=cached.get("raw", {}) or {},
+            )
+        else:
+            pending_idx.append(i)
+
+    if not pending_idx:
+        print(f"  --checkpoint-every: all {len(records)} records already cached; no scoring needed")
+        return [r for r in results if r is not None]  # type: ignore[list-item]
+
+    print(f"  --checkpoint-every: {len(pending_idx)} record(s) still to score "
+          f"(fsync every {checkpoint_every})")
+    pending_records = [records[i] for i in pending_idx]
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    written_since_flush = 0
+    with progress_path.open("a", encoding="utf-8") as f:
+        for idx, result in zip(
+            pending_idx,
+            detector.predict_batch(rec["text"] for rec in pending_records),
+        ):
+            r = records[idx]
+            results[idx] = result
+            entry = {
+                "id": str(r.get("id", idx)),
+                "y_true": LABEL_TO_INT[r["label"]],
+                "y_pred": LABEL_TO_INT[result.label],
+                "y_score": float(result.score_ai),
+                "raw": result.raw,
+            }
+            f.write(json.dumps(entry, default=str) + "\n")
+            written_since_flush += 1
+            if written_since_flush >= checkpoint_every:
+                f.flush()
+                try:
+                    import os as _os
+                    _os.fsync(f.fileno())
+                except OSError:
+                    pass
+                written_since_flush = 0
+        f.flush()
+        try:
+            import os as _os
+            _os.fsync(f.fileno())
+        except OSError:
+            pass
+
+    return [r for r in results if r is not None]  # type: ignore[list-item]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -228,6 +315,15 @@ def main() -> None:
                              "'test' block, no 'error' field), skip that detector. "
                              "Lets a pod-level rerun continue from where it stopped "
                              "without redoing already-completed detectors.")
+    parser.add_argument("--checkpoint-every", type=int, default=0,
+                        help="When > 0, write each record's per-record prediction "
+                             "to a JSONL sidecar (<output>.progress.jsonl) as it is "
+                             "produced, with an fsync every N records. Allows mid-run "
+                             "resume after a crash: a re-launch with the same args "
+                             "reads the sidecar, skips already-scored ids, and "
+                             "continues. The sidecar is deleted after the final "
+                             "metrics.json is written successfully. Required for slow "
+                             "Ollama-bound detectors like raidar on flaky hardware.")
     args = parser.parse_args()
 
     if args.list:
@@ -282,6 +378,16 @@ def main() -> None:
                 print(f"  --skip-if-exists: existing {out_path.name} is incomplete; re-running")
             except Exception:
                 print(f"  --skip-if-exists: existing {out_path.name} is unreadable; re-running")
+        # ``out_path`` is e.g. ``...raidar.metrics.json``. We want
+        # ``...raidar.progress.jsonl``, stripping the ``.metrics`` component.
+        # ``Path.with_suffix`` only replaces the *last* suffix, so naively
+        # using it produces ``...raidar.metrics.progress.jsonl`` (bug fixed
+        # 2026-05-29 after RAIDAR clean was already in flight under the old
+        # name; old in-flight files at the buggy path are still readable
+        # because resume here goes through the same path-builder).
+        progress_path = out_path.parent / out_path.name.replace(
+            ".metrics.json", ".progress.jsonl",
+        )
         try:
             cls = get_detector(name)
             overrides = detector_config.get(name, {}) or {}
@@ -290,7 +396,12 @@ def main() -> None:
             detector: BaselineDetector = cls(**overrides)
             detector.load()
             start = time.time()
-            results = list(detector.predict_batch(r["text"] for r in records))
+            if args.checkpoint_every and args.checkpoint_every > 0:
+                results = _score_with_checkpoint(
+                    detector, records, progress_path, args.checkpoint_every,
+                )
+            else:
+                results = list(detector.predict_batch(r["text"] for r in records))
             wall = time.time() - start
             summary = _summarise(name, results, records, wall, detector.describe())
             detector.close()
@@ -303,6 +414,15 @@ def main() -> None:
             }
 
         out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        # Clean up the progress sidecar once the final metrics.json is on disk,
+        # but only when the run produced a real "test" block. If it errored
+        # mid-way, keep the sidecar so the next launch can still resume.
+        if (args.checkpoint_every and args.checkpoint_every > 0
+                and progress_path.exists() and "test" in summary):
+            try:
+                progress_path.unlink()
+            except OSError:
+                pass
         if "test" in summary:
             t = summary["test"]
             print(f"  acc={t['accuracy']:.4f}  macro-F1={t['macro_f1']:.4f}  "

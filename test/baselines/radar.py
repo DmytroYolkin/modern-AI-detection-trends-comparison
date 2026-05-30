@@ -21,8 +21,24 @@ from .base import BaselineDetector, DetectorResult
 
 
 class RADAR(BaselineDetector):
+    """RADAR detector wrapper.
+
+    Kwargs
+    ------
+    checkpoint
+        HuggingFace seq-classification checkpoint (paper: ``TrustSafeAI/RADAR-Vicuna-7B``).
+    device, max_length, threshold, dtype, batch_size
+        Standard knobs.
+    load_in_4bit
+        When True, the 7B checkpoint is loaded via ``BitsAndBytesConfig`` for
+        4-bit NF4 weights (compute dtype fp16). Drops VRAM from ~14 GB (fp16)
+        to ~3.5 GB, making it fit on an 8 GB laptop GPU. Requires
+        ``bitsandbytes`` installed.
+    """
+
     name = "radar"
-    requires = ("torch", "transformers", "accelerate (recommended for 7B fp16)")
+    requires = ("torch", "transformers", "accelerate (recommended for 7B fp16)",
+                "bitsandbytes (for load_in_4bit=True)")
 
     def __init__(
         self,
@@ -32,6 +48,7 @@ class RADAR(BaselineDetector):
         dtype: str = "auto",
         threshold: float = 0.5,
         batch_size: int = 8,
+        load_in_4bit: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -41,6 +58,7 @@ class RADAR(BaselineDetector):
             dtype=dtype,
             threshold=threshold,
             batch_size=batch_size,
+            load_in_4bit=load_in_4bit,
             **kwargs,
         )
         self._model = None
@@ -50,19 +68,32 @@ class RADAR(BaselineDetector):
     def load(self) -> None:
         if self._loaded:
             return
+        import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
         from .fast_detect_gpt import _resolve_device
         from .binoculars import _resolve_dtype
 
         self._device = _resolve_device(self.config["device"])
-        dtype = _resolve_dtype(self.config["dtype"], self._device)
         self._tok = AutoTokenizer.from_pretrained(self.config["checkpoint"])
-        self._model = (
-            AutoModelForSequenceClassification
-            .from_pretrained(self.config["checkpoint"], torch_dtype=dtype)
-            .to(self._device)
-            .eval()
-        )
+
+        if self.config.get("load_in_4bit"):
+            from transformers import BitsAndBytesConfig
+            quant_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+            )
+            # bitsandbytes places weights on GPU itself; skip the .to(device) call.
+            self._model = AutoModelForSequenceClassification.from_pretrained(
+                self.config["checkpoint"], quantization_config=quant_config,
+            ).eval()
+        else:
+            dtype = _resolve_dtype(self.config["dtype"], self._device)
+            self._model = (
+                AutoModelForSequenceClassification
+                .from_pretrained(self.config["checkpoint"], torch_dtype=dtype)
+                .to(self._device)
+                .eval()
+            )
         super().load()
 
     def predict(self, text: str) -> DetectorResult:

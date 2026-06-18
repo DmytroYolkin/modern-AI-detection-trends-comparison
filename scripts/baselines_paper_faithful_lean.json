@@ -1,5 +1,5 @@
 {
-  "_comment": "Lean variant of baselines_paper_faithful.json -- detect_gpt n_perturbations dropped from 100 to 10 so the eval pod (Plan A) fits a ~15 h budget. R-Detect and RAIDAR are NOT listed because they run locally in Plan A (R-Detect on laptop GPU; RAIDAR overnight on laptop via Ollama). See docs/RUNPOD_eval_v2.md.",
+  "_comment": "Lean variant of baselines_paper_faithful.json -- detect_gpt n_perturbations dropped from 100 to 10 to fit a ~15 h GPU budget. R-Detect and RAIDAR are omitted here because they are run separately (R-Detect on a single GPU; RAIDAR via Ollama).",
   "detect_gpt": {
     "scoring_model": "EleutherAI/gpt-neo-2.7B",
     "mask_filling_model": "t5-large",

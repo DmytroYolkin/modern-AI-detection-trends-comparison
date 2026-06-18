@@ -1,0 +1,6 @@
+Controlled (in-distribution) USE set, protocol A, 5 seeds, 14 models.
+Top model by mean macro-F1: clf_logreg (classical) = 0.9979 +/- 0.0025; ROC-AUC 1.0000 +/- 0.0000; TPR@FPR<=1% 0.9992 +/- 0.0019.
+Macro-F1 spread across all models = 0.3749; max across-seed std = 0.0509.
+11/14 models at macro-F1 >= 0.987; 12/14 models at ROC-AUC >= 0.999.
+McNemar clf_logreg vs clf_hist_gbm: p = 0.0213 -> SIGNIFICANT.
+RECOMMENDATION: At least one model is separable on the controlled set; see the table/CIs above.

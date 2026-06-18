@@ -226,19 +226,32 @@ test/third_party/*/.cache/
 test/third_party/*/nltk_data/
 
 # --- transfer / runtime artifacts (regenerate, don't commit) ---
-# Feature-cache tarball produced by the RunPod download step
+# Feature-cache tarball produced by the cloud-GPU build
 features.tar.gz
-# RunPod CLI binary downloaded ad-hoc (platform-specific, not source)
+# GPU-host CLI binary downloaded ad-hoc (platform-specific, not source)
 runpodctl
 runpodctl.exe
 runpodctl-*
 
+# --- multi-seed controlled-set run ---
+# Keep models/ready_models_resplit/results/ + scripts/controlled_resplit/,
+# but ignore the heavy per-seed weights and feature caches
+# (regenerate with scripts/controlled_resplit/run_seed.py)
+models/ready_models_resplit/seed*/
+data/features_resplit/
+
+# Vendored upstream humanizer repos cloned at runtime by scripts/humanize_*.py
+scripts/_workdirs/
+
 # --- backups / one-off scratch ---
 # .bak files written by the resplit script and any other backup pattern
 *.bak
-# stale task-output files from harness runs
+# Dated local backup snapshots of feature caches / model directories
+data/features_*backup*/
+models/ready_models_*backup*/
+# stale task-output files
 *.output
-# local copies of pod-side logs if you scp them down
+# local copies of remote build logs
 build.log
 ollama.log
 

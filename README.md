@@ -1,11 +1,33 @@
 # Modern AI Detection Trends Comparison
 
-This repository compares modern AI-driven approaches for detecting human-vs-AI
-text. It combines three feature extractors — **NELA** (linguistic/credibility
-features), **StyleDecipher** (style-shift vs. LLM rewrites), and **TRACE**
-(contrastive author fingerprint) — and trains both **neural fusion** and
-**classical** classifiers on top of them, so the contribution of each extractor
-can be measured side by side.
+This repository accompanies the paper **"Toward Equitable AI Detection: A Hybrid
+Framework Integrating Stylometric Personalization and Language Proficiency
+Analysis"** and contains the code, datasets, trained checkpoints, and results
+behind it.
+
+It compares modern AI-driven approaches for detecting human-vs-AI text by
+combining three feature extractors — **NELA** (linguistic/credibility features),
+**StyleDecipher** (style-shift vs. LLM rewrites), and **TRACE** (contrastive
+author fingerprint) — and training both **neural fusion** and **classical**
+classifiers on top of them, so the contribution of each extractor can be
+measured side by side. The detectors are evaluated in a **controlled**
+in-distribution setting (USE essays) and an **out-of-distribution** setting
+(arXiv abstracts), both clean and under adversarial **humanizer** attacks.
+
+## Paper
+
+The full paper is included at [docs/paper.md](docs/paper.md). In short:
+
+- **Data** — 1,272 Uppsala Student English Corpus (USE) essays and 1,287 arXiv
+  computer-science abstracts, paraphrased by five LLMs to create matched
+  human/AI pairs (the filtered training corpus is USE-only: 963 human / 4,584
+  AI; arXiv is held out for out-of-distribution testing).
+- **Result** — the fused architecture reaches AUC ≈ 0.999 on the controlled
+  split and AUC = 0.8946 out-of-distribution (next best published baseline:
+  DetectGPT, 0.828), and is benchmarked against two modern humanizers under a
+  strict FPR < 1% educational threshold.
+
+If you use this work, please cite the paper above.
 
 ## Installation
 
@@ -46,9 +68,15 @@ ollama pull phi3
   extractor outputs.
 - `training/` — end-to-end training pipeline: feature caching, neural training,
   classical training. See [training/README.md](training/README.md).
-- `test/` — the evaluation CLI (`evaluate.py`) and the unit/integration tests.
-- `models/` — `ready_models/` (committed checkpoints) and `test_models/`
-  (gitignored experimental checkpoints).
+- `test/` — the evaluation CLIs (`evaluate.py`, `evaluate_arxiv.py`), the
+  published-baseline detector wrappers (`baselines/`), and the unit/integration
+  tests. The arXiv evaluation outputs (ROC curves, confusion matrices,
+  per-source CSVs, `REPORT.md`) live in `test/results/arxiv_eval/`.
+- `models/` — `ready_models/` (committed checkpoints), `test_models/`
+  (gitignored experimental checkpoints), and `ready_models_resplit/results/`
+  (multi-seed controlled-set metrics, CIs, and McNemar tests).
+- `docs/` — the paper ([docs/paper.md](docs/paper.md)) and the dataset
+  provenance reference ([docs/DATASET_STATISTICS.md](docs/DATASET_STATISTICS.md)).
 
 ## Pipeline at a Glance
 
@@ -156,6 +184,12 @@ only run when `RUN_EXTRACTOR_TESTS=1` is set.
 
 ## More Documentation
 
+- [docs/paper.md](docs/paper.md) — the full paper.
+- [METHODOLOGY.md](METHODOLOGY.md) — publication-ready description of the data,
+  extractors, fusion architecture, modality dropout, and evaluation protocol.
+- [docs/DATASET_STATISTICS.md](docs/DATASET_STATISTICS.md) — dataset provenance:
+  every corpus, transformation, filter, and split with counts read from the
+  committed artifacts.
 - [data/README.md](data/README.md) — dataset composition, sources, record
   schema, and the `preprocessing/` loader API.
 - [training/README.md](training/README.md) — training framework internals,

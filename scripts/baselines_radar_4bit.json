@@ -1,5 +1,5 @@
 {
-  "_comment": "Local 4-bit RADAR config -- fits 8 GB consumer GPU. Mirrors the binoculars 4-bit config from baselines_paper_faithful_lean.json. Use when the eval pod's full-fp16 RADAR-Vicuna-7B is unavailable.",
+  "_comment": "Local 4-bit RADAR config -- fits an 8 GB consumer GPU. Mirrors the binoculars 4-bit config in baselines_paper_faithful_lean.json. Use when the full-fp16 RADAR-Vicuna-7B config is not feasible.",
   "radar": {
     "checkpoint": "TrustSafeAI/RADAR-Vicuna-7B",
     "load_in_4bit": true,

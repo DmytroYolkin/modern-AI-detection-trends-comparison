@@ -1,5 +1,0 @@
-Validated, committed model checkpoints live here.
-
-Move a checkpoint from ../test_models/ into this folder once it has been
-evaluated on the test split and is considered "ready". Files in this folder
-ARE tracked by git.

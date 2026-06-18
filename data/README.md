@@ -6,16 +6,37 @@ This folder contains the finalized dataset used for training and evaluating the 
 
 ## Overview
 
-The dataset combines three types of text records:
+The **study corpus used by the paper is USE-only**: Uppsala Student English
+Corpus (USE) essays as the `human` class, and paraphrases of those same essays
+by five cloud-API LLMs as the `ai` class. After the TRACE author/sibling filters
+(see [METHODOLOGY.md §1.3](../METHODOLOGY.md) and
+[docs/DATASET_STATISTICS.md](../docs/DATASET_STATISTICS.md)) the trained corpus is:
+
+| Class | Count |
+|---|---|
+| Human (USE essays) | 963 |
+| AI (LLM rewrites of those essays) | 4,584 |
+
+The arXiv abstract set is held out as the external **out-of-distribution test**
+(see [`testing_dataset/`](testing_dataset/)); it is not part of this training
+corpus.
+
+### Raw bundle on disk
+
+The `.jsonl` files in `dataset_ready_final/` are a **superset** of the study
+corpus — they also carry auxiliary AI-detection sources (HC3, ArguGPT, RAID)
+that were explored during construction but **excluded from every trained model**,
+because they have no per-author identity and are dropped by the TRACE filters.
+Full composition of the raw bundle:
 
 | Type | Label | Count | Description |
 |---|---|---|---|
-| Human texts | `human` | 3,415 | Original human-authored texts (USE corpus + HC3 human answers) |
-| AI-original texts | `ai` | 3,620 | Texts generated directly by AI models (ArguGPT, RAID, HC3 ChatGPT answers) |
-| LLM rewrites | `ai` | 6,051 | Human texts rewritten by 5 different LLMs to stress-test style-based detectors |
+| Human texts | `human` | 3,415 | USE essays + HC3 human answers |
+| AI-original texts | `ai` | 3,620 | Directly AI-generated (ArguGPT, RAID, HC3 ChatGPT answers) — auxiliary, excluded |
+| LLM rewrites | `ai` | 6,051 | USE essays rewritten by 5 LLMs (the study's AI class) |
 | **Total** | | **13,086** | |
 
-**Train / Val / Test split** (author-disjoint for human texts):
+The raw bundle's author-disjoint train/val/test split:
 
 | Split | Total | Human | AI |
 |---|---|---|---|
@@ -29,10 +50,11 @@ The split is **author-disjoint**: all texts by the same human author are kept in
 
 ## Data Sources
 
-- **USE corpus** — University Student Essays. Human essays with author IDs; used both as human texts and as the source for LLM rewrites.
-- **ArguGPT / RAID** — AI-generated essays from multiple models; used as the AI-original class.
-- **HC3** (Hello-SimpleAI/HC3) — Paired human + ChatGPT answers to the same question across 5 domains: `reddit_eli5`, `finance`, `medicine`, `open_qa`, `wiki_csai`.
-- **LLM Rewrites** — Each USE human text was rewritten by up to 5 models to produce style-transferred AI text while preserving factual content:
+- **USE corpus** — Uppsala Student English Corpus (Axelsson 2000). Human essays
+  with author IDs; the study's `human` class and the source for the LLM rewrites.
+- **LLM Rewrites** — Each USE human text was rewritten by up to 5 cloud-API
+  models to produce style-transferred AI text while preserving factual content
+  (the study's `ai` class):
 
 | Provider | Model | Rewrites |
 |---|---|---|
@@ -43,6 +65,12 @@ The split is **author-disjoint**: all texts by the same human author are kept in
 | Anthropic | `claude-haiku-4-5` | 1,272 |
 
 On average each source text has **4.76 rewrites** (min 4, max 5), covering 430 unique authors.
+
+- *Auxiliary (excluded from the study):* **ArguGPT / RAID** (AI-generated
+  essays) and **HC3** (Hello-SimpleAI/HC3 — paired human + ChatGPT answers
+  across `reddit_eli5`, `finance`, `medicine`, `open_qa`, `wiki_csai`) ship in
+  the raw bundle but are dropped by the TRACE author/sibling filters, so no
+  trained model in the paper sees them.
 
 ---
 

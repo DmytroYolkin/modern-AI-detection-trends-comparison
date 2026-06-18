@@ -22,7 +22,7 @@ Prints a summary at the end:
   * per-source counts
   * per-humanizer counts
   * author count and min/max texts per author
-  * asserts >= 2 texts per author (per the user's requirement)
+  * asserts >= 2 texts per author (TRACE input-contract requirement)
 """
 
 from __future__ import annotations

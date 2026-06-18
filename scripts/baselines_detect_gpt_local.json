@@ -1,5 +1,5 @@
 {
-  "_comment": "Local-laptop DetectGPT config. N=10 perturbations + small scoring/mask models so the run fits a 4070 8 GB budget in a few hours. Paper-grade is GPT-Neo-2.7B + t5-large + N=100 (see baselines_paper_faithful.json) for the eval pod. Footnote: per Mitchell et al. 2023 ablation, N=10 is ~3-5 pp AUROC below N=100, paper-grade should supersede this when the pod is available.",
+  "_comment": "Local DetectGPT config: N=10 perturbations + small scoring/mask models so the run fits an 8 GB consumer GPU in a few hours. Paper-grade is GPT-Neo-2.7B + t5-large + N=100 (see baselines_paper_faithful.json). Per Mitchell et al. 2023, N=10 is ~3-5 pp AUROC below N=100; the paper-grade config supersedes this where a larger GPU is available.",
   "detect_gpt": {
     "scoring_model": "gpt2",
     "mask_filling_model": "t5-small",

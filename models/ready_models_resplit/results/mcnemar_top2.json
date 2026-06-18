@@ -1,0 +1,9 @@
+{
+  "model_a": "clf_logreg",
+  "model_b": "clf_hist_gbm",
+  "b": 13,
+  "c": 3,
+  "n_discordant": 16,
+  "p_value": 0.021270751953125,
+  "significant": true
+}
